@@ -12,19 +12,6 @@
 curuser="/home/$USER"
 config_file="/home/$USER/.dockr"
 
-check_storage_medium() {
-	device_names=$(lsblk -o KNAME)
-
-	read -p "Enter a target disk's name: " disk
-	for i in $device_names
-	do
-		if [ "$i" == "$disk" ]; then
-			return 1
-		fi
-	done 
-	return 0
-}
-
 move_docker() {
 
 	docker_parent=$(sed 's|\(.*\)/.*|\1|' <<< $1)
@@ -45,6 +32,7 @@ move_docker() {
 }
 
 initial_config() {
+
 	echo -e "Select external drive for the container \n"
 	echo "$(lsblk -o KNAME,TYPE,SIZE,MODEL,UUID)"
 
@@ -120,6 +108,7 @@ MOUNTDIR=$(cat $config_file | grep "Mountdir" | cut -c 10-)
 MOUNTPOINT=$(cat $config_file | grep "Mountpoint" | cut -c 12-)
 
 # actual mount point check
+# TODO: Ensure that mounted drive has same UUID as one listed in config file 
 MOUNT=$(lsblk -o UUID,MOUNTPOINT | awk -v u="$DISK" '$1 == u {print $2}')
 if [ "$MOUNT" == "$MOUNTDIR" ]; then
 	if [ ! -d "$MOUNTPOINT" ]; then
