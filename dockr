@@ -1,0 +1,132 @@
+#!/bin/bash 
+
+# 
+# dockr: Is a wrapper script around the `docker` command.
+# 		   Purpose of this script is to manage docker files stored on external storage.
+# 
+# This script will allow a user to run the docker command only 
+#   when the registered external drive is connected 
+#
+
+# Initial Setup
+curuser="/home/$USER"
+config_file="/home/$USER/.dockr"
+
+check_storage_medium() {
+	device_names=$(lsblk -o KNAME)
+
+	read -p "Enter a target disk's name: " disk
+	for i in $device_names
+	do
+		if [ "$i" == "$disk" ]; then
+			return 1
+		fi
+	done 
+	return 0
+}
+
+move_docker() {
+
+	docker_parent=$(sed 's|\(.*\)/.*|\1|' <<< $1)
+	echo ":: setting permissions on new container"
+	sudo chown -R root:root $docker_parent
+
+	echo ":: stopping docker services"
+	sudo systemctl stop docker.service 
+	
+	echo ":: moving storage location to $1"
+	sudo mv /var/lib/docker $1
+	
+	echo ":: creating a symlink to new location $1"
+	sudo ln -s $1 /var/lib/docker
+
+	echo ":: re-initiating docker services"
+	sudo systemctl start docker.service
+}
+
+initial_config() {
+	echo -e "Select external drive for the container \n"
+	echo "$(lsblk -o KNAME,TYPE,SIZE,MODEL,UUID)"
+
+	invalid_disk=0
+	device_names=$(lsblk -o UUID)
+
+	echo -n "Enter a target disk's UUID: "
+	read -p ": " disk
+	echo ":: $disk"
+
+	for i in $device_names
+	do
+		if [ "$i" == "$disk" ]; then
+			read -p "Would you like to use this device for storing docker containers? (Y/N): " confirm
+			if [[ $confirm == [yY] ]]; then
+				echo "Disk=$i" >> $config_file
+				echo "Mounted=True" >> $config_file
+				invalid_disk=1
+			fi
+		fi
+	done
+
+	if [ "$invalid_disk" -eq 0 ]; then
+		echo "Invalid input $disk. Please enter a valid disk name"
+		exit
+	else	
+		# Check whether the disk is mounted or not
+		mountpoint=$(lsblk -o UUID,MOUNTPOINT | awk -v u="$disk" '$1 == u {print $2}')
+		if [[ -n $mountpoint ]]
+		then
+			default_mountpoint="$mountpoint"/docker/data
+			# Set mount point and stuff similar to that 
+			echo -n "Would you like to create a storage folder? [default:$default_mountpoint]"
+			read -p ": " create_storage 
+
+			if [[ "$create_storage" == "Y" || $create_storage == "y" ]]; then
+				echo ":: Creating folder at $default_mountpoint"
+				mkdir -p $default_mountpoint
+				echo "Mountpoint=$default_mountpoint" >> $config_file
+				echo "Mountdir=$mountpoint" >> $config_file
+				move_docker $default_mountpoint
+			else
+				echo "Creating $create_storage at mountpoint"
+				mkdir -p $mountpoint/$create_storage
+				echo "Mountpoint=$mountpoint$create_storage" >> $config_file
+				echo "Mountdir=$mountpoint" >> $config_file
+				move_docker "$mountpoint$create_storage"
+			fi
+		else
+			echo "Please ensure that the storage medium is connected and online"
+			exit
+		fi
+
+		echo -e "Configuration is complete. Please take a look into what is stored in the file:\n"
+		cat $config_file
+	fi
+}
+
+if [ ! -f "$config_file" ]; then
+	echo "Could not detect .dockr file."
+	echo "Creating .dockr file at '$config_file'"
+
+	# touch $config_file
+	initial_config
+fi
+
+# get file data
+config_data=`cat $config_file`
+
+# config file data
+DISK=$(cat $config_file | grep "Disk" | cut -c 6-)
+MOUNTDIR=$(cat $config_file | grep "Mountdir" | cut -c 10-)
+MOUNTPOINT=$(cat $config_file | grep "Mountpoint" | cut -c 12-)
+
+# actual mount point check
+MOUNT=$(lsblk -o UUID,MOUNTPOINT | awk -v u="$DISK" '$1 == u {print $2}')
+if [ "$MOUNT" == "$MOUNTDIR" ]; then
+	if [ ! -d "$MOUNTPOINT" ]; then
+		echo "ERROR: Directory $MOUNTPOINT does not exist within the file"
+		exit
+	else 
+		docker "$@"
+	fi
+fi
+
